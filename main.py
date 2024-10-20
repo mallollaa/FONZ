@@ -84,6 +84,80 @@ def process_gross_add(event_df):
     event_df = pd.concat([event_df, total_row], ignore_index=True)
 
     return event_df
+
+def process_upgrade(event_df):
+    event_df = event_df.dropna(axis=1, how='all')
+    event_df.insert(
+        event_df.columns.get_loc('DiscountAmount') + 1,
+        'New Package Price',
+        event_df['Amount'] + event_df['DiscountAmount']
+    )
+    event_df.insert(
+        event_df.columns.get_loc('OriginalDiscountAmount') + 1,
+        'Package Price',
+        event_df['OriginalAmount'] + event_df['OriginalDiscountAmount']
+    )
+
+    event_df['delta_kd'] = event_df['New Package Price'] - event_df['Package Price']
+    event_df['Slab'] = event_df['delta_kd'].apply(calculate_slab)
+    event_df['Commission (KD)'] = event_df['delta_kd'] * event_df['Slab']
+    total_commission = event_df['Commission (KD)'].sum()
+    formatted_total = format_accounting(total_commission)
+    total_row = pd.DataFrame([{col: "" for col in event_df.columns},
+                              {'Commission (KD)': formatted_total}], index=['', 'Total'])
+    event_df = pd.concat([event_df, total_row], ignore_index=True)
+
+    return event_df
+
+def process_downgrade(event_df):
+    # Delete all empty columns
+    event_df = event_df.dropna(axis=1, how='all')
+
+    # Add the 'six months completed' column with the formula
+    event_df['six months completed'] = event_df['Age'].apply(
+        lambda x: 'YES' if x > 180 else 'NO'
+    )
+
+    # Filter to keep only rows where 'six months completed' is 'NO'
+    event_df = event_df[event_df['six months completed'] == 'NO']
+
+    # Add 'New Package Price' column after 'Discount Amount'
+    event_df.insert(
+        event_df.columns.get_loc('DiscountAmount') + 1,
+        'New Package Price',
+        event_df['Amount'] + event_df['DiscountAmount']
+    )
+    event_df.insert(
+        event_df.columns.get_loc('OriginalDiscountAmount') + 1,
+        'Package Price',
+        event_df['OriginalAmount'] + event_df['OriginalDiscountAmount']
+    )
+    event_df['delta_kd'] = event_df['New Package Price'] - event_df['Package Price']
+    event_df['Slab'] = event_df['delta_kd'].apply(calculate_slab)
+    event_df['Commission (KD)'] = -1 * event_df['delta_kd'] * event_df['Slab']
+    total_commission = event_df['Commission (KD)'].sum()
+    formatted_total = format_accounting(total_commission)
+    total_row = pd.DataFrame([{col: "" for col in event_df.columns},
+                              {'Commission (KD)': formatted_total}], index=['', 'Total'])
+    event_df = pd.concat([event_df, total_row], ignore_index=True)
+
+    return event_df
+
+# ---- need to doublecheck not 100 % correct -----
+def process_renewal(event_df):
+    event_df = event_df.dropna(axis=1, how='all')
+    event_df['service amount'] = event_df['Amount'] + event_df['DiscountAmount']
+    event_df['Commission (KD)'] = event_df['service amount'] / 2
+    total_commission = event_df['Commission (KD)'].sum()
+    formatted_total = format_accounting(total_commission)
+    total_row = pd.DataFrame([{col: "" for col in event_df.columns},
+                              {'Commission (KD)': formatted_total}], index=['', 'Total'])
+    event_df = pd.concat([event_df, total_row], ignore_index=True)
+
+    return event_df
+
+
+
 def process_file(file_path):
     shutil.copy(file_path, output_file_path)
     wb = load_workbook(output_file_path)
@@ -109,6 +183,12 @@ def process_file(file_path):
             event_df = process_gross_add(event_df)
         elif event_type == "CHURN":
             event_df = process_churn(event_df)
+        elif event_type == "UPGRADE":
+            event_df = process_upgrade(event_df)
+        elif event_type == "DOWNGRADE":
+            event_df = process_downgrade(event_df)
+        elif event_type == "RENEW": # need to doublecheck not 100 % correct
+            event_df = process_renewal(event_df)
 
         if event_type not in wb.sheetnames:
             wb.create_sheet(event_type)
