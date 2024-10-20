@@ -156,29 +156,75 @@ def process_renewal(event_df):
 
     return event_df
 
+def process_device_add(event_df):
+    # Delete all empty columns
+    event_df = event_df.dropna(axis=1, how='all')
 
+    # Rename 'Amount' to 'Package Price' and 'Original Amount' to 'Instalment'
+    event_df.rename(columns={'Amount': 'Package Price', 'OriginalAmount': 'Instalment'}, inplace=True)
+
+    # Add 'Slab' column based on 'Package Price'
+    event_df['Slab'] = event_df['Package Price'].apply(calculate_slab)
+
+    # Add 'Commission (KD)' column: Instalment * Slab
+    event_df['Commission (KD)'] = event_df['Instalment'] * event_df['Slab']
+
+    # Add total row for commission with accounting format
+    total_commission = event_df['Commission (KD)'].sum()
+    formatted_total = format_accounting(total_commission)
+
+    # Create a total row
+    total_row = pd.DataFrame([{col: "" for col in event_df.columns},
+                              {'Commission (KD)': formatted_total}], index=['', 'Total'])
+    event_df = pd.concat([event_df, total_row], ignore_index=True)
+
+    return event_df
+
+def process_activation(event_df):
+    event_df = event_df.dropna(axis=1, how='all')
+    event_df = event_df[event_df['Type'].str.lower() == 'enterprise']
+    allowed_reasons = ['new connection', 'add/remove/update']
+    event_df = event_df[event_df['Reason'].str.lower().isin(allowed_reasons)]
+    total_amount = event_df['Amount'].sum()
+    formatted_total = format_accounting(total_amount)
+    total_row = pd.DataFrame([{col: "" for col in event_df.columns},
+                              {'Amount': formatted_total}], index=['', 'Total'])
+    event_df = pd.concat([event_df, total_row], ignore_index=True)
+
+    return event_df
+
+def process_deactivation(event_df):
+
+    event_df = event_df.dropna(axis=1, how='all')
+    event_df = event_df[event_df['Type'].str.lower() == 'enterprise']
+    event_df['six months completed'] = event_df['Age'].apply(
+        lambda x: 'YES' if x > 180 else 'NO'
+    )
+    event_df = event_df[event_df['six months completed'] == 'NO']
+    allowed_reasons = ['termination', 'add/remove/update']
+    event_df = event_df[event_df['Reason'].str.lower().isin(allowed_reasons)]
+    total_amount = event_df['Amount'].sum()
+    formatted_total = format_accounting(total_amount)
+    total_row = pd.DataFrame([{col: "" for col in event_df.columns},
+                              {'Amount': formatted_total}], index=['', 'Total'])
+    event_df = pd.concat([event_df, total_row], ignore_index=True)
+    return event_df
 
 def process_file(file_path):
     shutil.copy(file_path, output_file_path)
     wb = load_workbook(output_file_path)
-
     first_sheet_name = wb.sheetnames[0]
     df = pd.read_excel(file_path, sheet_name=first_sheet_name)
-
     fonz_users = ['FONZ', 'FZ004360', 'FZ004361', 'V002741']
     df['New Payee ID'] = df['PayeeID'].apply(lambda x: 'FONZ' if x in fonz_users else x)
     df = df[df['New Payee ID'] == 'FONZ']
-
     event_types = ["ACTIVATION", "DEACTIVATION", "GROSS ADD", "CHURN",
                    "UPGRADE", "DOWNGRADE", "RENEW", "DEVICE ADD", "CLAWBACK"]
-
     for event_type in event_types:
         event_df = df[df['EventType'].str.upper() == event_type].copy()
-
         if event_df.empty:
             print(f"No data for {event_type}, skipping...")
             continue
-
         if event_type == "GROSS ADD":
             event_df = process_gross_add(event_df)
         elif event_type == "CHURN":
@@ -187,19 +233,15 @@ def process_file(file_path):
             event_df = process_upgrade(event_df)
         elif event_type == "DOWNGRADE":
             event_df = process_downgrade(event_df)
-        elif event_type == "RENEW": # need to doublecheck not 100 % correct
+        elif event_type == "RENEW":
             event_df = process_renewal(event_df)
-
         if event_type not in wb.sheetnames:
             wb.create_sheet(event_type)
             print(f"Created new sheet for {event_type}")
-
         event_sheet = wb[event_type]
-
         for r_idx, row in enumerate(dataframe_to_rows(event_df, index=False, header=True), 1):
             for c_idx, value in enumerate(row, 1):
                 event_sheet.cell(row=r_idx, column=c_idx, value=value)
-
         tab = Table(
             displayName=event_type.replace(" ", ""),
             ref=f"A1:{get_column_letter(len(event_df.columns))}{len(event_df)+1}"
@@ -213,7 +255,6 @@ def process_file(file_path):
         )
         tab.tableStyleInfo = style
         event_sheet.add_table(tab)
-
     wb.save(output_file_path)
     print(f"Processed and saved: {output_file_path}")
 def main():
